@@ -2,6 +2,55 @@ import { supabase, authStateChange } from './lib/supabase.js';
 
 let authChangeSubscription = null;
 
+// Helper function untuk ensure profile exists
+async function ensureProfileExists(userId, email, metadata = {}) {
+  try {
+    // Cek apakah profile sudah ada
+    const { data: existingProfile } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (existingProfile) {
+      console.log('Profile already exists');
+      return true;
+    }
+
+    // Jika tidak ada, buat profile baru
+    console.log('Creating profile for user:', userId);
+    const username = metadata.username || email.split('@')[0];
+    const fullName = metadata.full_name || username;
+
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .insert({
+        id: userId,
+        username: username,
+        full_name: fullName,
+        is_online: false,
+        last_seen: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) {
+      // Jika error karena duplicate (race condition), itu OK
+      if (error.code === '23505') {
+        console.log('Profile was created by trigger (race condition)');
+        return true;
+      }
+      throw error;
+    }
+
+    console.log('Profile created successfully:', data);
+    return true;
+  } catch (error) {
+    console.error('Error ensuring profile exists:', error);
+    return false;
+  }
+}
+
 export async function signUp(email, password, username, fullName) {
   try {
     console.log('Attempting signup for:', email, username);
@@ -23,6 +72,14 @@ export async function signUp(email, password, username, fullName) {
     }
     
     console.log('Signup successful:', data);
+
+    // Tunggu sebentar untuk trigger berjalan, lalu ensure profile exists
+    if (data.user) {
+      setTimeout(async () => {
+        await ensureProfileExists(data.user.id, email, { username, full_name: fullName });
+      }, 1000);
+    }
+
     return data;
   } catch (error) {
     console.error('Signup exception:', error);
@@ -47,12 +104,23 @@ export async function signIn(email, password) {
     console.log('Signin successful:', data.user?.email);
 
     if (data.user) {
-      // Create session and update status
-      await Promise.all([
-        createSession(data.user.id),
-        updateOnlineStatus(data.user.id, true),
-        logActivity(data.user.id, 'login', { timestamp: new Date().toISOString() })
-      ]);
+      // PENTING: Pastikan profile ada sebelum melakukan operasi lain
+      const profileExists = await ensureProfileExists(
+        data.user.id, 
+        data.user.email,
+        data.user.user_metadata
+      );
+
+      if (profileExists) {
+        // Sekarang aman untuk create session dan update status
+        await Promise.all([
+          createSession(data.user.id),
+          updateOnlineStatus(data.user.id, true),
+          logActivity(data.user.id, 'login', { timestamp: new Date().toISOString() })
+        ]);
+      } else {
+        console.warn('Could not ensure profile exists, skipping secondary operations');
+      }
     }
 
     return data;
@@ -94,6 +162,9 @@ export async function getCurrentUser() {
     }
 
     if (user) {
+      // Ensure profile exists
+      await ensureProfileExists(user.id, user.email, user.user_metadata);
+
       const { data: profile, error: profileError } = await supabase
         .from('user_profiles')
         .select('*')
