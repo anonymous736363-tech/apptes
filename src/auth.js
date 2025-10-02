@@ -3,66 +3,115 @@ import { supabase, authStateChange } from './lib/supabase.js';
 let authChangeSubscription = null;
 
 export async function signUp(email, password, username, fullName) {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        username,
-        full_name: fullName
+  try {
+    console.log('Attempting signup for:', email, username);
+    
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username,
+          full_name: fullName
+        }
       }
-    }
-  });
+    });
 
-  if (error) throw error;
-  return data;
+    if (error) {
+      console.error('Signup error:', error);
+      throw error;
+    }
+    
+    console.log('Signup successful:', data);
+    return data;
+  } catch (error) {
+    console.error('Signup exception:', error);
+    throw error;
+  }
 }
 
 export async function signIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password
-  });
+  try {
+    console.log('Attempting signin for:', email);
+    
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
 
-  if (error) throw error;
+    if (error) {
+      console.error('Signin error:', error);
+      throw error;
+    }
 
-  if (data.user) {
-    await createSession(data.user.id);
-    await updateOnlineStatus(data.user.id, true);
-    await logActivity(data.user.id, 'login', { timestamp: new Date().toISOString() });
+    console.log('Signin successful:', data.user?.email);
+
+    if (data.user) {
+      // Create session and update status
+      await Promise.all([
+        createSession(data.user.id),
+        updateOnlineStatus(data.user.id, true),
+        logActivity(data.user.id, 'login', { timestamp: new Date().toISOString() })
+      ]);
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Signin exception:', error);
+    throw error;
   }
-
-  return data;
 }
 
 export async function signOut() {
-  const { data: { user } } = await supabase.auth.getUser();
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
 
-  if (user) {
-    await endSession(user.id);
-    await updateOnlineStatus(user.id, false);
-    await logActivity(user.id, 'logout', { timestamp: new Date().toISOString() });
+    if (user) {
+      await Promise.all([
+        endSession(user.id),
+        updateOnlineStatus(user.id, false),
+        logActivity(user.id, 'logout', { timestamp: new Date().toISOString() })
+      ]);
+    }
+
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    
+    console.log('Signout successful');
+  } catch (error) {
+    console.error('Signout error:', error);
+    throw error;
   }
-
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
 }
 
 export async function getCurrentUser() {
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error) throw error;
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    
+    if (error) {
+      console.error('Get user error:', error);
+      throw error;
+    }
 
-  if (user) {
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
+    if (user) {
+      const { data: profile, error: profileError } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
 
-    return { ...user, profile };
+      if (profileError) {
+        console.error('Get profile error:', profileError);
+      }
+
+      return { ...user, profile };
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Get current user exception:', error);
+    throw error;
   }
-
-  return null;
 }
 
 export function onAuthStateChanged(callback) {
@@ -87,51 +136,75 @@ export async function updateProfile(userId, updates) {
 }
 
 async function createSession(userId) {
-  const { error } = await supabase
-    .from('user_sessions')
-    .insert({
-      user_id: userId,
-      is_active: true
-    });
+  try {
+    const { error } = await supabase
+      .from('user_sessions')
+      .insert({
+        user_id: userId,
+        is_active: true
+      });
 
-  if (error) console.error('Error creating session:', error);
+    if (error) {
+      console.error('Error creating session:', error);
+    }
+  } catch (error) {
+    console.error('Create session exception:', error);
+  }
 }
 
 async function endSession(userId) {
-  const { error } = await supabase
-    .from('user_sessions')
-    .update({
-      ended_at: new Date().toISOString(),
-      is_active: false
-    })
-    .eq('user_id', userId)
-    .eq('is_active', true);
+  try {
+    const { error } = await supabase
+      .from('user_sessions')
+      .update({
+        ended_at: new Date().toISOString(),
+        is_active: false
+      })
+      .eq('user_id', userId)
+      .eq('is_active', true);
 
-  if (error) console.error('Error ending session:', error);
+    if (error) {
+      console.error('Error ending session:', error);
+    }
+  } catch (error) {
+    console.error('End session exception:', error);
+  }
 }
 
 async function updateOnlineStatus(userId, isOnline) {
-  const { error } = await supabase
-    .from('user_profiles')
-    .update({
-      is_online: isOnline,
-      last_seen: new Date().toISOString()
-    })
-    .eq('id', userId);
+  try {
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({
+        is_online: isOnline,
+        last_seen: new Date().toISOString()
+      })
+      .eq('id', userId);
 
-  if (error) console.error('Error updating online status:', error);
+    if (error) {
+      console.error('Error updating online status:', error);
+    }
+  } catch (error) {
+    console.error('Update online status exception:', error);
+  }
 }
 
 async function logActivity(userId, activityType, activityData) {
-  const { error } = await supabase
-    .from('user_activities')
-    .insert({
-      user_id: userId,
-      activity_type: activityType,
-      activity_data: activityData
-    });
+  try {
+    const { error } = await supabase
+      .from('user_activities')
+      .insert({
+        user_id: userId,
+        activity_type: activityType,
+        activity_data: activityData
+      });
 
-  if (error) console.error('Error logging activity:', error);
+    if (error) {
+      console.error('Error logging activity:', error);
+    }
+  } catch (error) {
+    console.error('Log activity exception:', error);
+  }
 }
 
 export async function getOnlineUsers() {
@@ -141,7 +214,10 @@ export async function getOnlineUsers() {
     .eq('is_online', true)
     .order('username');
 
-  if (error) throw error;
+  if (error) {
+    console.error('Get online users error:', error);
+    throw error;
+  }
   return data || [];
 }
 
@@ -151,7 +227,10 @@ export async function getAllUsers() {
     .select('*')
     .order('created_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    console.error('Get all users error:', error);
+    throw error;
+  }
   return data || [];
 }
 
@@ -165,7 +244,10 @@ export async function getUserActivities(limit = 10) {
     .order('created_at', { ascending: false })
     .limit(limit);
 
-  if (error) throw error;
+  if (error) {
+    console.error('Get user activities error:', error);
+    throw error;
+  }
   return data || [];
 }
 
@@ -179,7 +261,10 @@ export async function getActiveSessions() {
     .eq('is_active', true)
     .order('started_at', { ascending: false });
 
-  if (error) throw error;
+  if (error) {
+    console.error('Get active sessions error:', error);
+    throw error;
+  }
   return data || [];
 }
 
